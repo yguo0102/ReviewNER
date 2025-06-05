@@ -9,6 +9,6 @@ export interface HighlightedSegment {
 
 export interface NerSample {
   id: string;
-  old_text: string;
-  new_text: string;
+  data: Record<string, string>; // Stores all columns from the CSV row
+  // old_text and new_text are expected keys within data for core functionality
 }

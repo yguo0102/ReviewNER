@@ -15,18 +15,24 @@ import { useToast } from "@/hooks/use-toast";
 const defaultSampleData: NerSample[] = [
   {
     id: 'sample1',
-    old_text: "John went to the Emory clinic for a routine exam on Jan 5, 2023.",
-    new_text: "<name> went to the <location> clinic for a routine exam on <date>."
+    data: {
+      old_text: "John went to the Emory clinic for a routine exam on Jan 5, 2023.",
+      new_text: "<name> went to the <location> clinic for a routine exam on <date>."
+    }
   },
   {
     id: 'sample2',
-    old_text: "Meet me at Times Square tomorrow afternoon.",
-    new_text: "Meet me at <location> <date>."
+    data: {
+      old_text: "Meet me at Times Square tomorrow afternoon.",
+      new_text: "Meet me at <location> <date>."
+    }
   },
   {
     id: 'sample3',
-    old_text: "The patient, Jane Doe, reported fever starting on 2024-03-10.",
-    new_text: "The patient, <name>, reported fever starting on <date>."
+    data: {
+      old_text: "The patient, Jane Doe, reported fever starting on 2024-03-10.",
+      new_text: "The patient, <name>, reported fever starting on <date>."
+    }
   },
 ];
 
@@ -42,6 +48,33 @@ const escapeCSVField = (field: string | undefined | null): string => {
   return result;
 };
 
+const parseCsvRow = (row: string): string[] => {
+  const values: string[] = [];
+  let currentVal = '';
+  let inQuotes = false;
+  for (let j = 0; j < row.length; j++) {
+    const char = row[j];
+    if (char === '"') {
+      if (inQuotes && j + 1 < row.length && row[j+1] === '"') {
+        // Escaped quote
+        currentVal += '"';
+        j++; // Skip next quote
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      values.push(currentVal);
+      currentVal = '';
+    } else {
+      currentVal += char;
+    }
+  }
+  values.push(currentVal); // Add the last value
+  // Trim, remove surrounding quotes (if any) that were not part of escaping, and unescape "" to "
+  return values.map(v => v.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
+};
+
+
 export function NERPageContent() {
   const [activeSamples, setActiveSamples] = useState<NerSample[]>(defaultSampleData);
   const [currentSampleIndex, setCurrentSampleIndex] = useState(0);
@@ -49,39 +82,45 @@ export function NERPageContent() {
   const [currentNewText, setCurrentNewText] = useState<string>('');
   const [isLoadingAi, setIsLoadingAi] = useState(false);
   const [animationKey, setAnimationKey] = useState(0);
+  const [csvHeaders, setCsvHeaders] = useState<string[]>(['old_text', 'new_text']);
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const currentSampleData = useMemo(() => {
+    if (activeSamples.length > 0 && currentSampleIndex < activeSamples.length) {
+      return activeSamples[currentSampleIndex].data;
+    }
+    return null;
+  }, [activeSamples, currentSampleIndex]);
+
 
   const saveCurrentSampleEdits = useCallback(() => {
     if (activeSamples.length > 0 && currentSampleIndex < activeSamples.length) {
       const updatedSamples = [...activeSamples];
-      updatedSamples[currentSampleIndex] = {
-        ...updatedSamples[currentSampleIndex],
-        new_text: currentNewText,
-      };
+      const sampleToUpdate = { ...updatedSamples[currentSampleIndex] };
+      sampleToUpdate.data = { ...sampleToUpdate.data, new_text: currentNewText };
+      updatedSamples[currentSampleIndex] = sampleToUpdate;
       setActiveSamples(updatedSamples);
     }
   }, [activeSamples, currentSampleIndex, currentNewText]);
 
 
   useEffect(() => {
-    if (activeSamples.length > 0 && currentSampleIndex < activeSamples.length) {
-      const sample = activeSamples[currentSampleIndex];
-      setOriginalOldText(sample.old_text);
-      setCurrentNewText(sample.new_text);
+    if (currentSampleData) {
+      setOriginalOldText(currentSampleData.old_text || '');
+      setCurrentNewText(currentSampleData.new_text || '');
       setAnimationKey(prev => prev + 1);
     } else {
       setOriginalOldText('');
       setCurrentNewText('');
-       if (activeSamples.length === 0 && defaultSampleData.length > 0) { // Check defaultSampleData to avoid toast on initial empty load if default is also empty
-        // This toast condition might need adjustment if defaultSampleData could be initially empty
+       if (activeSamples.length === 0 && defaultSampleData.length > 0) {
+        // Initial load or all samples removed, no specific toast here anymore as it's handled by UI state
       }
     }
-  }, [currentSampleIndex, activeSamples, toast]);
+  }, [currentSampleIndex, activeSamples, currentSampleData]);
 
 
   useEffect(() => {
-    // Initial toast if no samples are available (and default samples were not used)
     if (activeSamples.length === 0 && defaultSampleData.length === 0) {
          toast({
             title: "No Samples Loaded",
@@ -90,7 +129,7 @@ export function NERPageContent() {
         });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Runs once on mount
+  }, []);
 
 
   const handleNewTextChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -111,7 +150,8 @@ export function NERPageContent() {
   };
 
   const handleAiCorrect = async () => {
-    if (!originalOldText && !currentNewText && activeSamples.length === 0) {
+    const currentOldText = currentSampleData?.old_text;
+    if (!currentOldText && !currentNewText && activeSamples.length === 0) {
       toast({
         title: "No Data",
         description: "Load a sample before using AI Correct.",
@@ -122,18 +162,16 @@ export function NERPageContent() {
     setIsLoadingAi(true);
     try {
       const result = await correctNERTags({
-        old_text: originalOldText,
+        old_text: currentOldText || '', // Use current sample's old_text
         new_text: currentNewText,
       });
       if (result && result.corrected_text) {
         setCurrentNewText(result.corrected_text);
-        // Save AI corrected text to activeSamples
         if (activeSamples.length > 0 && currentSampleIndex < activeSamples.length) {
           const updatedSamples = [...activeSamples];
-          updatedSamples[currentSampleIndex] = {
-            ...updatedSamples[currentSampleIndex],
-            new_text: result.corrected_text,
-          };
+          const sampleToUpdate = { ...updatedSamples[currentSampleIndex] };
+          sampleToUpdate.data = { ...sampleToUpdate.data, new_text: result.corrected_text };
+          updatedSamples[currentSampleIndex] = sampleToUpdate;
           setActiveSamples(updatedSamples);
         }
         setAnimationKey(prev => prev + 1);
@@ -197,9 +235,9 @@ export function NERPageContent() {
         return;
       }
 
-      const header = rows[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''));
-      const oldTextIndex = header.indexOf('old_text');
-      const newTextIndex = header.indexOf('new_text');
+      const headerFromFile = parseCsvRow(rows[0]).map(h => h.trim().toLowerCase());
+      const oldTextIndex = headerFromFile.indexOf('old_text');
+      const newTextIndex = headerFromFile.indexOf('new_text');
 
       if (oldTextIndex === -1 || newTextIndex === -1) {
         toast({
@@ -209,45 +247,33 @@ export function NERPageContent() {
         });
         return;
       }
+      setCsvHeaders(headerFromFile); // Store all headers
 
       const newSamples: NerSample[] = [];
       for (let i = 1; i < rows.length; i++) {
-        const values: string[] = [];
-        let currentVal = '';
-        let inQuotes = false;
-        for (const char of rows[i]) {
-            if (char === '"' && (i === 0 || rows[i][rows[i].indexOf(char)-1] !== '"')) { // simplified quote handling
-                inQuotes = !inQuotes;
-            } else if (char === ',' && !inQuotes) {
-                values.push(currentVal.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
-                currentVal = '';
-            } else {
-                currentVal += char;
-            }
-        }
-        values.push(currentVal.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
+        if (!rows[i].trim()) continue; // Skip empty lines
+        const values = parseCsvRow(rows[i]);
+        const rowData: Record<string, string> = {};
+        headerFromFile.forEach((headerName, colIndex) => {
+          rowData[headerName] = values[colIndex] || '';
+        });
 
-
-        if (values.length > Math.max(oldTextIndex, newTextIndex)) {
-          const old_text = values[oldTextIndex]?.trim();
-          const new_text = values[newTextIndex]?.trim();
-          if (old_text && new_text) {
-            newSamples.push({ id: `csv_sample_${Date.now()}_${i}`, old_text, new_text });
-          }
+        if (rowData.old_text && rowData.new_text) { // Basic validation
+            newSamples.push({ id: `csv_sample_${Date.now()}_${i}`, data: rowData });
         }
       }
 
       if (newSamples.length === 0) {
         toast({
           title: "No Valid Data",
-          description: "No valid samples found in the CSV file.",
+          description: "No valid samples found in the CSV file. Ensure 'old_text' and 'new_text' have values.",
           variant: "destructive",
         });
         return;
       }
 
       setActiveSamples(newSamples);
-      setCurrentSampleIndex(0); 
+      setCurrentSampleIndex(0);
       toast({
         title: "CSV Uploaded",
         description: `${newSamples.length} samples loaded successfully.`,
@@ -264,7 +290,7 @@ export function NERPageContent() {
 
     reader.readAsText(file);
     if (fileInputRef.current) {
-      fileInputRef.current.value = ''; 
+      fileInputRef.current.value = '';
     }
   };
 
@@ -282,44 +308,46 @@ export function NERPageContent() {
       return;
     }
 
-    // Ensure the current view's edits are saved before exporting
-    saveCurrentSampleEdits(); 
+    saveCurrentSampleEdits();
 
-    // Use a temporary state for activeSamples to ensure the latest version is used after saveCurrentSampleEdits
-    // This is a bit of a workaround for the async nature of setState. A better way would be to pass activeSamples to the export function.
-    // For now, this should work given saveCurrentSampleEdits updates the state that handleExportCSV will then read.
-    // Consider this: saveCurrentSampleEdits updates the state, then this function reads it.
-    // Let's rely on the state updated by saveCurrentSampleEdits.
+    // Use a brief timeout to allow state to potentially update from saveCurrentSampleEdits
+    // This is a common pattern but ideally saveCurrentSampleEdits would return the updated samples or be synchronous regarding the data it modifies for export.
+    // For this case, `activeSamples` state itself is updated, so the timeout helps ensure the `map` below uses the most recent version.
+    setTimeout(() => {
+      const headersToExport = csvHeaders.length > 0 ? csvHeaders : ['old_text', 'new_text'];
+      const csvHeaderRow = headersToExport.map(escapeCSVField).join(',') + '\n';
 
-    const csvHeader = '"old_text","new_text"\n';
-    const csvRows = activeSamples.map(sample => 
-      `${escapeCSVField(sample.old_text)},${escapeCSVField(sample.new_text)}`
-    ).join('\n');
-    
-    const csvContent = csvHeader + csvRows;
+      const csvRows = activeSamples.map(sample => {
+        return headersToExport.map(headerName => {
+          return escapeCSVField(sample.data[headerName]);
+        }).join(',');
+      }).join('\n');
+      
+      const csvContent = csvHeaderRow + csvRows;
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a");
-    if (link.download !== undefined) { 
-      const url = URL.createObjectURL(blob);
-      link.setAttribute("href", url);
-      link.setAttribute("download", "edited_ner_data.csv");
-      link.style.visibility = 'hidden';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      toast({
-        title: "Export Successful",
-        description: "Edited data downloaded as edited_ner_data.csv.",
-      });
-    } else {
-       toast({
-        title: "Export Failed",
-        description: "Your browser doesn't support this download method.",
-        variant: "destructive",
-      });
-    }
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement("a");
+      if (link.download !== undefined) {
+        const url = URL.createObjectURL(blob);
+        link.setAttribute("href", url);
+        link.setAttribute("download", "edited_ner_data.csv");
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        toast({
+          title: "Export Successful",
+          description: "Edited data downloaded as edited_ner_data.csv.",
+        });
+      } else {
+         toast({
+          title: "Export Failed",
+          description: "Your browser doesn't support this download method.",
+          variant: "destructive",
+        });
+      }
+    }, 100); // Small delay for state update to propagate
   };
 
 
@@ -353,7 +381,7 @@ export function NERPageContent() {
             <RefreshCw className="mr-2 h-4 w-4" />
             Load Next Sample
           </Button>
-          <Button onClick={handleAiCorrect} disabled={isLoadingAi || activeSamples.length === 0}>
+          <Button onClick={handleAiCorrect} disabled={isLoadingAi || activeSamples.length === 0 || !currentSampleData}>
             {isLoadingAi ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             ) : (
@@ -371,13 +399,13 @@ export function NERPageContent() {
             </CardHeader>
             <CardContent className="text-center">
               <p className="text-muted-foreground">
-                Please upload a CSV file to start reviewing NER tags or refresh to use default samples.
+                Please upload a CSV file to start reviewing NER tags or load default samples.
               </p>
               <Button onClick={triggerFileUpload} className="mt-4">
                 <FileText className="mr-2 h-4 w-4" />
                 Upload CSV
               </Button>
-               <Button onClick={() => {setActiveSamples(defaultSampleData); setCurrentSampleIndex(0);}} className="mt-4 ml-2" variant="secondary" disabled={defaultSampleData.length === 0}>
+               <Button onClick={() => {setActiveSamples(defaultSampleData); setCurrentSampleIndex(0); setCsvHeaders(['old_text', 'new_text']);}} className="mt-4 ml-2" variant="secondary" disabled={defaultSampleData.length === 0}>
                 Load Default Samples
               </Button>
             </CardContent>
@@ -405,6 +433,7 @@ export function NERPageContent() {
                 onChange={handleNewTextChange}
                 placeholder="Enter new text with NER tags..."
                 className="h-full min-h-[200px] w-full resize-none border-0 rounded-t-none rounded-b-lg focus-visible:ring-0 focus-visible:ring-offset-0"
+                disabled={!currentSampleData}
               />
             </CardContent>
           </Card>
@@ -413,4 +442,3 @@ export function NERPageContent() {
     </div>
   );
 }
-
