@@ -5,11 +5,12 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Sparkles, RefreshCw, Loader2, FileText, Download } from 'lucide-react';
+import { FileText, Download, ArrowLeft, ArrowRight } from 'lucide-react';
 import { HighlightedTextRenderer } from './highlighted-text-renderer';
 import type { NerSample } from './types';
 import { getOldTextHighlightedParts } from '@/lib/ner-utils';
-import { correctNERTags } from '@/ai/flows/correct-ner-tags';
+// AI Correct functionality removed, so correctNERTags import is removed.
+// import { correctNERTags } from '@/ai/flows/correct-ner-tags';
 import { useToast } from "@/hooks/use-toast";
 
 const defaultSampleData: NerSample[] = [
@@ -48,30 +49,53 @@ const escapeCSVField = (field: string | undefined | null): string => {
   return result;
 };
 
-const parseCsvRow = (row: string): string[] => {
-  const values: string[] = [];
-  let currentVal = '';
+// Robust CSV row parsing function
+const parseCsvRows = (csvText: string): string[][] => {
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
   let inQuotes = false;
-  for (let j = 0; j < row.length; j++) {
-    const char = row[j];
+  let currentField = '';
+
+  for (let i = 0; i < csvText.length; i++) {
+    const char = csvText[i];
+
     if (char === '"') {
-      if (inQuotes && j + 1 < row.length && row[j+1] === '"') {
-        // Escaped quote
-        currentVal += '"';
-        j++; // Skip next quote
+      if (inQuotes && i + 1 < csvText.length && csvText[i + 1] === '"') {
+        // Escaped double quote
+        currentField += '"';
+        i++; // Skip the next quote
       } else {
         inQuotes = !inQuotes;
       }
     } else if (char === ',' && !inQuotes) {
-      values.push(currentVal);
-      currentVal = '';
+      currentRow.push(currentField.trim());
+      currentField = '';
+    } else if ((char === '\n' || char === '\r') && !inQuotes) {
+      // Check for \r\n sequence
+      if (char === '\r' && i + 1 < csvText.length && csvText[i + 1] === '\n') {
+        i++; // Skip the \n
+      }
+      // End of row
+      currentRow.push(currentField.trim());
+      if (currentRow.some(field => field.length > 0)) { // Add row if not empty
+        rows.push(currentRow);
+      }
+      currentRow = [];
+      currentField = '';
     } else {
-      currentVal += char;
+      currentField += char;
     }
   }
-  values.push(currentVal); // Add the last value
-  // Trim, remove surrounding quotes (if any) that were not part of escaping, and unescape "" to "
-  return values.map(v => v.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
+
+  // Add the last field and row if they exist
+  currentRow.push(currentField.trim());
+  if (currentRow.some(field => field.length > 0) || rows.length === 0 && currentRow.length > 0 ) {
+     if (csvText.trim().length > 0 && (currentRow.length > 0 && currentRow.some(f => f.length >0))) {
+        rows.push(currentRow);
+     }
+  }
+  
+  return rows.filter(row => row.length > 0 && row.some(field => field.trim() !== ''));
 };
 
 
@@ -80,7 +104,7 @@ export function NERPageContent() {
   const [currentSampleIndex, setCurrentSampleIndex] = useState(0);
   const [originalOldText, setOriginalOldText] = useState<string>('');
   const [currentNewText, setCurrentNewText] = useState<string>('');
-  const [isLoadingAi, setIsLoadingAi] = useState(false);
+  // isLoadingAi state removed
   const [animationKey, setAnimationKey] = useState(0);
   const [csvHeaders, setCsvHeaders] = useState<string[]>(['old_text', 'new_text']);
   const { toast } = useToast();
@@ -149,54 +173,20 @@ export function NERPageContent() {
     setCurrentSampleIndex((prevIndex) => (prevIndex + 1) % activeSamples.length);
   };
 
-  const handleAiCorrect = async () => {
-    const currentOldText = currentSampleData?.old_text;
-    if (!currentOldText && !currentNewText && activeSamples.length === 0) {
+  const handleLoadPreviousSample = () => {
+    if (activeSamples.length === 0) {
       toast({
-        title: "No Data",
-        description: "Load a sample before using AI Correct.",
+        title: "No Samples",
+        description: "Upload a CSV file to load samples.",
         variant: "default",
       });
       return;
     }
-    setIsLoadingAi(true);
-    try {
-      const result = await correctNERTags({
-        old_text: currentOldText || '', // Use current sample's old_text
-        new_text: currentNewText,
-      });
-      if (result && result.corrected_text) {
-        setCurrentNewText(result.corrected_text);
-        if (activeSamples.length > 0 && currentSampleIndex < activeSamples.length) {
-          const updatedSamples = [...activeSamples];
-          const sampleToUpdate = { ...updatedSamples[currentSampleIndex] };
-          sampleToUpdate.data = { ...sampleToUpdate.data, new_text: result.corrected_text };
-          updatedSamples[currentSampleIndex] = sampleToUpdate;
-          setActiveSamples(updatedSamples);
-        }
-        setAnimationKey(prev => prev + 1);
-        toast({
-          title: "AI Correction Applied",
-          description: "The new text has been updated with AI suggestions.",
-        });
-      } else {
-        toast({
-          title: "AI Correction Failed",
-          description: "Could not get corrections from AI.",
-          variant: "destructive",
-        });
-      }
-    } catch (error) {
-      console.error("AI Correction error:", error);
-      toast({
-          title: "AI Correction Error",
-          description: "An error occurred while applying AI corrections.",
-          variant: "destructive",
-      });
-    } finally {
-      setIsLoadingAi(false);
-    }
+    saveCurrentSampleEdits();
+    setCurrentSampleIndex((prevIndex) => (prevIndex - 1 + activeSamples.length) % activeSamples.length);
   };
+
+  // handleAiCorrect function removed
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -225,17 +215,18 @@ export function NERPageContent() {
         return;
       }
 
-      const rows = text.split('\n').map(row => row.trim()).filter(row => row.length > 0);
-      if (rows.length < 2) {
+      const parsedRows = parseCsvRows(text);
+
+      if (parsedRows.length < 1) { // Needs at least a header row
         toast({
           title: "Invalid CSV Format",
-          description: "CSV must contain a header and at least one data row.",
+          description: "CSV must contain a header row.",
           variant: "destructive",
         });
         return;
       }
-
-      const headerFromFile = parseCsvRow(rows[0]).map(h => h.trim().toLowerCase());
+      
+      const headerFromFile = parsedRows[0].map(h => h.trim().toLowerCase());
       const oldTextIndex = headerFromFile.indexOf('old_text');
       const newTextIndex = headerFromFile.indexOf('new_text');
 
@@ -247,37 +238,67 @@ export function NERPageContent() {
         });
         return;
       }
-      setCsvHeaders(headerFromFile); // Store all headers
+      setCsvHeaders(headerFromFile);
 
       const newSamples: NerSample[] = [];
-      for (let i = 1; i < rows.length; i++) {
-        if (!rows[i].trim()) continue; // Skip empty lines
-        const values = parseCsvRow(rows[i]);
+      // Start from 1 if there's more than one row (header + data)
+      // If only one row, it's considered header only, no data.
+      const dataRows = parsedRows.length > 1 ? parsedRows.slice(1) : [];
+
+
+      for (let i = 0; i < dataRows.length; i++) {
+        const values = dataRows[i];
+        if (values.length !== headerFromFile.length) {
+          // console.warn(`Skipping row ${i+1}: Mismatched column count. Expected ${headerFromFile.length}, got ${values.length}`);
+          toast({
+            title: "CSV Parsing Warning",
+            description: `Row ${i+2} has an inconsistent number of columns and was skipped.`, // +2 because header is row 1, data starts row 2
+            variant: "default"
+          })
+          continue; 
+        }
         const rowData: Record<string, string> = {};
         headerFromFile.forEach((headerName, colIndex) => {
           rowData[headerName] = values[colIndex] || '';
         });
 
-        if (rowData.old_text && rowData.new_text) { // Basic validation
+        if (rowData.old_text !== undefined && rowData.new_text !== undefined) { // Check for presence, not just truthiness
             newSamples.push({ id: `csv_sample_${Date.now()}_${i}`, data: rowData });
+        } else {
+           // console.warn(`Skipping row ${i+1}: Missing old_text or new_text values.`);
         }
       }
 
-      if (newSamples.length === 0) {
-        toast({
-          title: "No Valid Data",
-          description: "No valid samples found in the CSV file. Ensure 'old_text' and 'new_text' have values.",
+
+      if (newSamples.length === 0 && dataRows.length > 0) {
+         toast({
+          title: "No Valid Data Rows",
+          description: "No valid samples found in the CSV after the header. Ensure 'old_text' and 'new_text' columns are present and rows match header count.",
           variant: "destructive",
         });
         return;
       }
+       if (newSamples.length === 0 && dataRows.length === 0) {
+         toast({
+          title: "No Data Rows",
+          description: "The CSV file contains only a header row or is empty.",
+          variant: "default",
+        });
+        // Allow setting empty samples if user uploads an empty (but valid header) file.
+        // setActiveSamples([]); // This would clear defaults if an empty file is loaded.
+        // setCurrentSampleIndex(0); // Reset index
+        // return; // Or maybe proceed with empty activeSamples
+      }
+
 
       setActiveSamples(newSamples);
-      setCurrentSampleIndex(0);
-      toast({
-        title: "CSV Uploaded",
-        description: `${newSamples.length} samples loaded successfully.`,
-      });
+      setCurrentSampleIndex(0); // Reset to the first sample of the new set
+      if (newSamples.length > 0) {
+        toast({
+            title: "CSV Uploaded",
+            description: `${newSamples.length} samples loaded successfully.`,
+        });
+      }
     };
 
     reader.onerror = () => {
@@ -310,9 +331,6 @@ export function NERPageContent() {
 
     saveCurrentSampleEdits();
 
-    // Use a brief timeout to allow state to potentially update from saveCurrentSampleEdits
-    // This is a common pattern but ideally saveCurrentSampleEdits would return the updated samples or be synchronous regarding the data it modifies for export.
-    // For this case, `activeSamples` state itself is updated, so the timeout helps ensure the `map` below uses the most recent version.
     setTimeout(() => {
       const headersToExport = csvHeaders.length > 0 ? csvHeaders : ['old_text', 'new_text'];
       const csvHeaderRow = headersToExport.map(escapeCSVField).join(',') + '\n';
@@ -347,14 +365,14 @@ export function NERPageContent() {
           variant: "destructive",
         });
       }
-    }, 100); // Small delay for state update to propagate
+    }, 100);
   };
 
 
   const oldTextHighlightedSegments = useMemo(() => {
-    if (!originalOldText) return [];
-    return getOldTextHighlightedParts(originalOldText, currentNewText);
-  }, [originalOldText, currentNewText]);
+    if (!originalOldText && !currentNewText && activeSamples.length === 0) return [];
+    return getOldTextHighlightedParts(originalOldText || '', currentNewText || '');
+  }, [originalOldText, currentNewText, activeSamples.length]);
 
 
   return (
@@ -377,18 +395,15 @@ export function NERPageContent() {
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
-          <Button onClick={handleLoadNextSample} variant="outline" disabled={activeSamples.length <= 1 && currentSampleIndex === 0}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Load Next Sample
+          <Button onClick={handleLoadPreviousSample} variant="outline" disabled={activeSamples.length <= 1}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Previous Sample
           </Button>
-          <Button onClick={handleAiCorrect} disabled={isLoadingAi || activeSamples.length === 0 || !currentSampleData}>
-            {isLoadingAi ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Sparkles className="mr-2 h-4 w-4" />
-            )}
-            AI Correct
+          <Button onClick={handleLoadNextSample} variant="outline" disabled={activeSamples.length <= 1}>
+            <ArrowRight className="mr-2 h-4 w-4" />
+            Next Sample
           </Button>
+          {/* AI Correct button removed */}
         </div>
       </div>
 
@@ -415,7 +430,7 @@ export function NERPageContent() {
           <Card className="flex flex-col">
             <CardHeader>
               <CardTitle>Original Text (Read-only)</CardTitle>
-              <CardDescription>This is the original text content. Current sample: {currentSampleIndex + 1} of {activeSamples.length}</CardDescription>
+              <CardDescription>This is the original text content. Current sample: {activeSamples.length > 0 ? currentSampleIndex + 1 : 0} of {activeSamples.length}</CardDescription>
             </CardHeader>
             <CardContent className="flex-grow p-6 bg-muted/30 rounded-b-lg min-h-[200px] overflow-auto">
               <HighlightedTextRenderer segments={oldTextHighlightedSegments} animationKey={animationKey} />
@@ -442,3 +457,4 @@ export function NERPageContent() {
     </div>
   );
 }
+
