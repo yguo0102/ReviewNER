@@ -55,7 +55,6 @@ const escapeCSVField = (field: string | undefined | null): string => {
   return result;
 };
 
-// Robust CSV row parsing function
 const parseCsvRows = (csvText: string): string[][] => {
   const rows: string[][] = [];
   let currentRow: string[] = [];
@@ -67,9 +66,8 @@ const parseCsvRows = (csvText: string): string[][] => {
 
     if (char === '"') {
       if (inQuotes && i + 1 < csvText.length && csvText[i + 1] === '"') {
-        // Escaped double quote
         currentField += '"';
-        i++; // Skip the next quote
+        i++; 
       } else {
         inQuotes = !inQuotes;
       }
@@ -77,13 +75,11 @@ const parseCsvRows = (csvText: string): string[][] => {
       currentRow.push(currentField.trim());
       currentField = '';
     } else if ((char === '\n' || char === '\r') && !inQuotes) {
-      // Check for \r\n sequence
       if (char === '\r' && i + 1 < csvText.length && csvText[i + 1] === '\n') {
-        i++; // Skip the \n
+        i++; 
       }
-      // End of row
       currentRow.push(currentField.trim());
-      if (currentRow.some(field => field.length > 0)) { // Add row if not empty
+      if (currentRow.some(field => field.length > 0)) { 
         rows.push(currentRow);
       }
       currentRow = [];
@@ -93,7 +89,6 @@ const parseCsvRows = (csvText: string): string[][] => {
     }
   }
 
-  // Add the last field and row if they exist
   currentRow.push(currentField.trim());
   if (currentRow.some(field => field.length > 0) || rows.length === 0 && currentRow.length > 0 ) {
      if (csvText.trim().length > 0 && (currentRow.length > 0 && currentRow.some(f => f.length >0))) {
@@ -104,9 +99,13 @@ const parseCsvRows = (csvText: string): string[][] => {
   return rows.filter(row => row.length > 0 && row.some(field => field.trim() !== ''));
 };
 
+const NER_APP_ACTIVE_SAMPLES_KEY = 'nerAppActiveSamples';
+const NER_APP_CURRENT_SAMPLE_INDEX_KEY = 'nerAppCurrentSampleIndex';
+const NER_APP_CSV_HEADERS_KEY = 'nerAppCsvHeaders';
+
 
 export function NERPageContent() {
-  const [activeSamples, setActiveSamples] = useState<NerSample[]>(prepareDefaultSamples());
+  const [activeSamples, setActiveSamples] = useState<NerSample[]>([]);
   const [currentSampleIndex, setCurrentSampleIndex] = useState(0);
   const [originalOldText, setOriginalOldText] = useState<string>('');
   const [currentNewText, setCurrentNewText] = useState<string>('');
@@ -114,6 +113,67 @@ export function NERPageContent() {
   const [csvHeaders, setCsvHeaders] = useState<string[]>(['old_text', 'new_text']);
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+
+  useEffect(() => {
+    try {
+      const cachedSamples = localStorage.getItem(NER_APP_ACTIVE_SAMPLES_KEY);
+      const cachedIndex = localStorage.getItem(NER_APP_CURRENT_SAMPLE_INDEX_KEY);
+      const cachedHeaders = localStorage.getItem(NER_APP_CSV_HEADERS_KEY);
+
+      if (cachedSamples) {
+        const parsedSamples: NerSample[] = JSON.parse(cachedSamples);
+        if (parsedSamples.length > 0) {
+          setActiveSamples(parsedSamples);
+          if (cachedIndex) {
+            const parsedIndex = parseInt(cachedIndex, 10);
+            setCurrentSampleIndex(parsedIndex >= 0 && parsedIndex < parsedSamples.length ? parsedIndex : 0);
+          }
+          if (cachedHeaders) {
+            setCsvHeaders(JSON.parse(cachedHeaders));
+          }
+        } else {
+          // Cached samples are empty, load defaults
+          setActiveSamples(prepareDefaultSamples());
+          setCurrentSampleIndex(0);
+          setCsvHeaders(['old_text', 'new_text']);
+        }
+      } else {
+        // No cached samples, load defaults
+        setActiveSamples(prepareDefaultSamples());
+        setCurrentSampleIndex(0);
+        setCsvHeaders(['old_text', 'new_text']);
+      }
+    } catch (error) {
+      console.error("Error loading from localStorage:", error);
+      // Fallback to defaults if parsing fails
+      setActiveSamples(prepareDefaultSamples());
+      setCurrentSampleIndex(0);
+      setCsvHeaders(['old_text', 'new_text']);
+    }
+    setIsLoaded(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); 
+
+  useEffect(() => {
+    if (isLoaded) {
+      localStorage.setItem(NER_APP_ACTIVE_SAMPLES_KEY, JSON.stringify(activeSamples));
+    }
+  }, [activeSamples, isLoaded]);
+
+  useEffect(() => {
+    if (isLoaded) {
+      localStorage.setItem(NER_APP_CURRENT_SAMPLE_INDEX_KEY, String(currentSampleIndex));
+    }
+  }, [currentSampleIndex, isLoaded]);
+
+  useEffect(() => {
+    if (isLoaded) {
+      localStorage.setItem(NER_APP_CSV_HEADERS_KEY, JSON.stringify(csvHeaders));
+    }
+  }, [csvHeaders, isLoaded]);
+
 
   const currentSampleData = useMemo(() => {
     if (activeSamples.length > 0 && currentSampleIndex < activeSamples.length) {
@@ -128,9 +188,8 @@ export function NERPageContent() {
       const updatedSamples = [...activeSamples];
       const sampleToUpdate = { ...updatedSamples[currentSampleIndex] };
       sampleToUpdate.data = { ...sampleToUpdate.data, new_text: currentNewText };
-      // original_new_text is not changed here, it's set at load time
       updatedSamples[currentSampleIndex] = sampleToUpdate;
-      setActiveSamples(updatedSamples);
+      setActiveSamples(updatedSamples); // This will trigger the useEffect to save to localStorage
     }
   }, [activeSamples, currentSampleIndex, currentNewText]);
 
@@ -140,30 +199,30 @@ export function NERPageContent() {
       setOriginalOldText(currentSampleData.old_text || '');
       setCurrentNewText(currentSampleData.new_text || '');
       setAnimationKey(prev => prev + 1);
-    } else {
+    } else if (isLoaded && activeSamples.length === 0) { // Only if loaded and truly no samples
       setOriginalOldText('');
       setCurrentNewText('');
-       if (activeSamples.length === 0 && initialDefaultSampleData.length > 0) {
-        // Initial load or all samples removed, no specific toast here anymore as it's handled by UI state
-      }
     }
-  }, [currentSampleIndex, activeSamples, currentSampleData]);
+  }, [currentSampleIndex, activeSamples, currentSampleData, isLoaded]);
 
 
   useEffect(() => {
-    if (activeSamples.length === 0 && initialDefaultSampleData.length === 0) { // Check against raw default data length
+    // This effect now primarily handles initial toast if defaults are empty and no cache
+    if (isLoaded && activeSamples.length === 0 && initialDefaultSampleData.length === 0) {
          toast({
             title: "No Samples Loaded",
-            description: "Upload a CSV or refresh to use default samples.",
+            description: "Upload a CSV or ensure default samples are available.",
             variant: "default",
         });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isLoaded]); // Depends on isLoaded to ensure it runs after attempting to load from cache
 
 
   const handleNewTextChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setCurrentNewText(event.target.value);
+    // Auto-save on text change might be too frequent.
+    // Edits are saved to activeSamples (and thus localStorage) upon navigation by saveCurrentSampleEdits.
   };
 
   const handleLoadNextSample = () => {
@@ -222,7 +281,7 @@ export function NERPageContent() {
 
       const parsedRows = parseCsvRows(text);
 
-      if (parsedRows.length < 1) { // Needs at least a header row
+      if (parsedRows.length < 1) { 
         toast({
           title: "Invalid CSV Format",
           description: "CSV must contain a header row.",
@@ -243,7 +302,7 @@ export function NERPageContent() {
         });
         return;
       }
-      setCsvHeaders(headerFromFile);
+      setCsvHeaders(headerFromFile); // This will trigger useEffect to save to localStorage
 
       const newSamples: NerSample[] = [];
       const dataRows = parsedRows.length > 1 ? parsedRows.slice(1) : [];
@@ -268,7 +327,7 @@ export function NERPageContent() {
             newSamples.push({
               id: `csv_sample_${Date.now()}_${i}`,
               data: rowData,
-              original_new_text: rowData.new_text // Store original new_text from CSV
+              original_new_text: rowData.new_text 
             });
         }
       }
@@ -290,9 +349,8 @@ export function NERPageContent() {
         });
       }
 
-
-      setActiveSamples(newSamples);
-      setCurrentSampleIndex(0); 
+      setActiveSamples(newSamples); // This will trigger useEffect to save to localStorage
+      setCurrentSampleIndex(0); // This will trigger useEffect to save to localStorage
       if (newSamples.length > 0) {
         toast({
             title: "CSV Uploaded",
@@ -329,9 +387,13 @@ export function NERPageContent() {
       return;
     }
 
-    saveCurrentSampleEdits();
+    saveCurrentSampleEdits(); // Ensure last edits are in activeSamples
 
+    // Use a timeout to allow activeSamples state to update from saveCurrentSampleEdits if needed
+    // before accessing it for export. This ensures the latest data is used.
     setTimeout(() => {
+      const currentSamplesForExport = activeSamples; // Use the state variable directly
+
       const baseExportHeaders = csvHeaders.length > 0 ? csvHeaders : ['old_text', 'new_text'];
       const finalExportHeaders = [...baseExportHeaders];
       if (!finalExportHeaders.includes('is_changed')) {
@@ -340,15 +402,13 @@ export function NERPageContent() {
 
       const csvHeaderRow = finalExportHeaders.map(escapeCSVField).join(',') + '\n';
 
-      const csvRows = activeSamples.map(sample => {
+      const csvRows = currentSamplesForExport.map(sample => {
         const rowDataForExport: Record<string, string | undefined | null> = {};
         
-        // Populate with existing data based on baseExportHeaders
         baseExportHeaders.forEach(header => {
             rowDataForExport[header] = sample.data[header];
         });
 
-        // Determine and add/overwrite is_changed
         const isChanged = sample.original_new_text !== undefined && sample.data.new_text !== sample.original_new_text;
         rowDataForExport.is_changed = isChanged ? 'true' : 'false';
         
@@ -381,7 +441,7 @@ export function NERPageContent() {
           variant: "destructive",
         });
       }
-    }, 100);
+    }, 100); // 100ms delay to ensure state update is processed
   };
 
 
@@ -389,6 +449,15 @@ export function NERPageContent() {
     if (!originalOldText && !currentNewText && activeSamples.length === 0) return [];
     return getOldTextHighlightedParts(originalOldText || '', currentNewText || '');
   }, [originalOldText, currentNewText, activeSamples.length]);
+
+  if (!isLoaded) {
+    return (
+      <div className="flex flex-col flex-grow p-4 md:p-6 lg:p-8 space-y-6 items-center justify-center">
+        <p>Loading ReviewNER...</p>
+        {/* Optionally, add a spinner or skeleton loader here */}
+      </div>
+    );
+  }
 
 
   return (
@@ -437,9 +506,15 @@ export function NERPageContent() {
               </Button>
                <Button 
                 onClick={() => {
-                  setActiveSamples(prepareDefaultSamples()); 
+                  const defaultSamps = prepareDefaultSamples();
+                  setActiveSamples(defaultSamps); 
                   setCurrentSampleIndex(0); 
                   setCsvHeaders(['old_text', 'new_text']);
+                  if (defaultSamps.length > 0) {
+                     toast({ title: "Default samples loaded." });
+                  } else {
+                     toast({ title: "No default samples available.", variant: "default"});
+                  }
                 }} 
                 className="mt-4 ml-2" 
                 variant="secondary" 
@@ -481,3 +556,4 @@ export function NERPageContent() {
     </div>
   );
 }
+
