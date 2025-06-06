@@ -15,22 +15,25 @@ const initialDefaultSampleData: Omit<NerSample, 'original_new_text'>[] = [
   {
     id: 'sample1',
     data: {
-      old_text: "John went to the Emory clinic for a routine exam on Jan 5, 2023.",
-      new_text: "<name> went to the <location> clinic for a routine exam on <date>."
+      text: "John went to the Emory clinic for a routine exam on Jan 5, 2023.",
+      deid_text: "<name> went to the <location> clinic for a routine exam on <date>.",
+      champsid: "CH001"
     }
   },
   {
     id: 'sample2',
     data: {
-      old_text: "Meet me at Times Square tomorrow afternoon.",
-      new_text: "Meet me at <location> <date>."
+      text: "Meet me at Times Square tomorrow afternoon.",
+      deid_text: "Meet me at <location> <date>.",
+      champsid: "CH002"
     }
   },
   {
     id: 'sample3',
     data: {
-      old_text: "The patient, Jane Doe, reported fever starting on 2024-03-10.",
-      new_text: "The patient, <name>, reported fever starting on <date>."
+      text: "The patient, Jane Doe, reported fever starting on 2024-03-10.",
+      deid_text: "The patient, <name>, reported fever starting on <date>.",
+      champsid: "CH003"
     }
   },
 ];
@@ -38,7 +41,7 @@ const initialDefaultSampleData: Omit<NerSample, 'original_new_text'>[] = [
 const prepareDefaultSamples = (): NerSample[] => {
   return initialDefaultSampleData.map(s => ({
     ...s,
-    original_new_text: s.data.new_text,
+    original_new_text: s.data.deid_text,
   }));
 };
 
@@ -110,7 +113,7 @@ export function NERPageContent() {
   const [originalOldText, setOriginalOldText] = useState<string>('');
   const [currentNewText, setCurrentNewText] = useState<string>('');
   const [animationKey, setAnimationKey] = useState(0);
-  const [csvHeaders, setCsvHeaders] = useState<string[]>(['old_text', 'new_text']);
+  const [csvHeaders, setCsvHeaders] = useState<string[]>(['text', 'deid_text', 'champsid']);
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -134,23 +137,20 @@ export function NERPageContent() {
             setCsvHeaders(JSON.parse(cachedHeaders));
           }
         } else {
-          // Cached samples are empty, load defaults
           setActiveSamples(prepareDefaultSamples());
           setCurrentSampleIndex(0);
-          setCsvHeaders(['old_text', 'new_text']);
+          setCsvHeaders(['text', 'deid_text', 'champsid']);
         }
       } else {
-        // No cached samples, load defaults
         setActiveSamples(prepareDefaultSamples());
         setCurrentSampleIndex(0);
-        setCsvHeaders(['old_text', 'new_text']);
+        setCsvHeaders(['text', 'deid_text', 'champsid']);
       }
     } catch (error) {
       console.error("Error loading from localStorage:", error);
-      // Fallback to defaults if parsing fails
       setActiveSamples(prepareDefaultSamples());
       setCurrentSampleIndex(0);
-      setCsvHeaders(['old_text', 'new_text']);
+      setCsvHeaders(['text', 'deid_text', 'champsid']);
     }
     setIsLoaded(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -184,22 +184,23 @@ export function NERPageContent() {
 
 
   const saveCurrentSampleEdits = useCallback(() => {
-    if (activeSamples.length > 0 && currentSampleIndex < activeSamples.length) {
+    if (activeSamples.length > 0 && currentSampleIndex < activeSamples.length && currentSampleData) {
       const updatedSamples = [...activeSamples];
       const sampleToUpdate = { ...updatedSamples[currentSampleIndex] };
-      sampleToUpdate.data = { ...sampleToUpdate.data, new_text: currentNewText };
+      // Ensure data object exists before trying to spread it
+      sampleToUpdate.data = { ...(sampleToUpdate.data || {}), deid_text: currentNewText };
       updatedSamples[currentSampleIndex] = sampleToUpdate;
-      setActiveSamples(updatedSamples); // This will trigger the useEffect to save to localStorage
+      setActiveSamples(updatedSamples); 
     }
-  }, [activeSamples, currentSampleIndex, currentNewText]);
+  }, [activeSamples, currentSampleIndex, currentNewText, currentSampleData]);
 
 
   useEffect(() => {
     if (currentSampleData) {
-      setOriginalOldText(currentSampleData.old_text || '');
-      setCurrentNewText(currentSampleData.new_text || '');
+      setOriginalOldText(currentSampleData.text || '');
+      setCurrentNewText(currentSampleData.deid_text || '');
       setAnimationKey(prev => prev + 1);
-    } else if (isLoaded && activeSamples.length === 0) { // Only if loaded and truly no samples
+    } else if (isLoaded && activeSamples.length === 0) { 
       setOriginalOldText('');
       setCurrentNewText('');
     }
@@ -207,7 +208,6 @@ export function NERPageContent() {
 
 
   useEffect(() => {
-    // This effect now primarily handles initial toast if defaults are empty and no cache
     if (isLoaded && activeSamples.length === 0 && initialDefaultSampleData.length === 0) {
          toast({
             title: "No Samples Loaded",
@@ -216,13 +216,11 @@ export function NERPageContent() {
         });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoaded]); // Depends on isLoaded to ensure it runs after attempting to load from cache
+  }, [isLoaded]); 
 
 
   const handleNewTextChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setCurrentNewText(event.target.value);
-    // Auto-save on text change might be too frequent.
-    // Edits are saved to activeSamples (and thus localStorage) upon navigation by saveCurrentSampleEdits.
   };
 
   const handleLoadNextSample = () => {
@@ -269,8 +267,8 @@ export function NERPageContent() {
 
     const reader = new FileReader();
     reader.onload = (e) => {
-      const text = e.target?.result as string;
-      if (!text) {
+      const textContent = e.target?.result as string;
+      if (!textContent) {
         toast({
           title: "File Read Error",
           description: "Could not read the file content.",
@@ -279,7 +277,7 @@ export function NERPageContent() {
         return;
       }
 
-      const parsedRows = parseCsvRows(text);
+      const parsedRows = parseCsvRows(textContent);
 
       if (parsedRows.length < 1) { 
         toast({
@@ -291,18 +289,18 @@ export function NERPageContent() {
       }
       
       const headerFromFile = parsedRows[0].map(h => h.trim().toLowerCase());
-      const oldTextIndex = headerFromFile.indexOf('old_text');
-      const newTextIndex = headerFromFile.indexOf('new_text');
+      const rawTextIndex = headerFromFile.indexOf('text');
+      const deidTextIndex = headerFromFile.indexOf('deid_text');
 
-      if (oldTextIndex === -1 || newTextIndex === -1) {
+      if (rawTextIndex === -1 || deidTextIndex === -1) {
         toast({
           title: "Missing Columns",
-          description: "CSV must contain 'old_text' and 'new_text' columns.",
+          description: "CSV must contain 'text' and 'deid_text' columns.",
           variant: "destructive",
         });
         return;
       }
-      setCsvHeaders(headerFromFile); // This will trigger useEffect to save to localStorage
+      setCsvHeaders(headerFromFile); 
 
       const newSamples: NerSample[] = [];
       const dataRows = parsedRows.length > 1 ? parsedRows.slice(1) : [];
@@ -323,11 +321,11 @@ export function NERPageContent() {
           rowData[headerName] = values[colIndex] || '';
         });
 
-        if (rowData.old_text !== undefined && rowData.new_text !== undefined) {
+        if (rowData.text !== undefined && rowData.deid_text !== undefined) {
             newSamples.push({
               id: `csv_sample_${Date.now()}_${i}`,
               data: rowData,
-              original_new_text: rowData.new_text 
+              original_new_text: rowData.deid_text 
             });
         }
       }
@@ -336,7 +334,7 @@ export function NERPageContent() {
       if (newSamples.length === 0 && dataRows.length > 0) {
          toast({
           title: "No Valid Data Rows",
-          description: "No valid samples found in the CSV after the header. Ensure 'old_text' and 'new_text' columns are present and rows match header count.",
+          description: "No valid samples found in the CSV after the header. Ensure 'text' and 'deid_text' columns are present and rows match header count.",
           variant: "destructive",
         });
         return;
@@ -349,8 +347,8 @@ export function NERPageContent() {
         });
       }
 
-      setActiveSamples(newSamples); // This will trigger useEffect to save to localStorage
-      setCurrentSampleIndex(0); // This will trigger useEffect to save to localStorage
+      setActiveSamples(newSamples); 
+      setCurrentSampleIndex(0); 
       if (newSamples.length > 0) {
         toast({
             title: "CSV Uploaded",
@@ -387,14 +385,12 @@ export function NERPageContent() {
       return;
     }
 
-    saveCurrentSampleEdits(); // Ensure last edits are in activeSamples
+    saveCurrentSampleEdits(); 
 
-    // Use a timeout to allow activeSamples state to update from saveCurrentSampleEdits if needed
-    // before accessing it for export. This ensures the latest data is used.
     setTimeout(() => {
-      const currentSamplesForExport = activeSamples; // Use the state variable directly
+      const currentSamplesForExport = activeSamples; 
 
-      const baseExportHeaders = csvHeaders.length > 0 ? csvHeaders : ['old_text', 'new_text'];
+      const baseExportHeaders = csvHeaders.length > 0 ? csvHeaders : ['text', 'deid_text'];
       const finalExportHeaders = [...baseExportHeaders];
       if (!finalExportHeaders.includes('is_changed')) {
         finalExportHeaders.push('is_changed');
@@ -408,8 +404,12 @@ export function NERPageContent() {
         baseExportHeaders.forEach(header => {
             rowDataForExport[header] = sample.data[header];
         });
+        
+        // Ensure the deid_text for export is the potentially edited one
+        rowDataForExport['deid_text'] = sample.data.deid_text;
 
-        const isChanged = sample.original_new_text !== undefined && sample.data.new_text !== sample.original_new_text;
+
+        const isChanged = sample.original_new_text !== undefined && sample.data.deid_text !== sample.original_new_text;
         rowDataForExport.is_changed = isChanged ? 'true' : 'false';
         
         return finalExportHeaders.map(headerName => {
@@ -441,7 +441,7 @@ export function NERPageContent() {
           variant: "destructive",
         });
       }
-    }, 100); // 100ms delay to ensure state update is processed
+    }, 100); 
   };
 
 
@@ -454,7 +454,6 @@ export function NERPageContent() {
     return (
       <div className="flex flex-col flex-grow p-4 md:p-6 lg:p-8 space-y-6 items-center justify-center">
         <p>Loading ReviewNER...</p>
-        {/* Optionally, add a spinner or skeleton loader here */}
       </div>
     );
   }
@@ -509,7 +508,7 @@ export function NERPageContent() {
                   const defaultSamps = prepareDefaultSamples();
                   setActiveSamples(defaultSamps); 
                   setCurrentSampleIndex(0); 
-                  setCsvHeaders(['old_text', 'new_text']);
+                  setCsvHeaders(['text', 'deid_text', 'champsid']);
                   if (defaultSamps.length > 0) {
                      toast({ title: "Default samples loaded." });
                   } else {
@@ -529,7 +528,10 @@ export function NERPageContent() {
           <Card className="flex flex-col">
             <CardHeader>
               <CardTitle>Original Text (Read-only)</CardTitle>
-              <CardDescription>This is the original text content. Current sample: {activeSamples.length > 0 ? currentSampleIndex + 1 : 0} of {activeSamples.length}</CardDescription>
+              <CardDescription>
+                Current sample: {activeSamples.length > 0 ? currentSampleIndex + 1 : 0} of {activeSamples.length}
+                {currentSampleData?.champsid && <span className="ml-4 font-medium text-foreground">ChampsID: {currentSampleData.champsid}</span>}
+              </CardDescription>
             </CardHeader>
             <CardContent className="flex-grow p-6 bg-muted/30 rounded-b-lg min-h-[200px] overflow-auto">
               <HighlightedTextRenderer segments={oldTextHighlightedSegments} animationKey={animationKey} />
@@ -538,14 +540,14 @@ export function NERPageContent() {
 
           <Card className="flex flex-col">
             <CardHeader>
-              <CardTitle>New Text (Editable)</CardTitle>
+              <CardTitle>De-identified Text (Editable)</CardTitle>
               <CardDescription>Edit the text below. Use tags like &lt;name&gt;, &lt;location&gt;, &lt;date&gt;.</CardDescription>
             </CardHeader>
             <CardContent className="flex-grow p-0">
               <Textarea
                 value={currentNewText}
                 onChange={handleNewTextChange}
-                placeholder="Enter new text with NER tags..."
+                placeholder="Enter de-identified text with NER tags..."
                 className="h-full min-h-[200px] w-full resize-none border-0 rounded-t-none rounded-b-lg focus-visible:ring-0 focus-visible:ring-offset-0"
                 disabled={!currentSampleData}
               />
