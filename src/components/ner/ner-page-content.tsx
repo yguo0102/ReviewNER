@@ -5,7 +5,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { FileText, Download, ArrowLeft, ArrowRight } from 'lucide-react';
+import { FileText, Download, ArrowLeft, ArrowRight, Trash2 } from 'lucide-react';
 import { HighlightedTextRenderer } from './highlighted-text-renderer';
 import type { NerSample } from './types';
 import { getOldTextHighlightedParts } from '@/lib/ner-utils';
@@ -289,10 +289,10 @@ export function NERPageContent() {
       }
       
       const headerFromFile = parsedRows[0].map(h => h.trim().toLowerCase());
-      const rawTextIndex = headerFromFile.indexOf('text');
+      const textIndex = headerFromFile.indexOf('text');
       const deidTextIndex = headerFromFile.indexOf('deid_text');
 
-      if (rawTextIndex === -1 || deidTextIndex === -1) {
+      if (textIndex === -1 || deidTextIndex === -1) {
         toast({
           title: "Missing Columns",
           description: "CSV must contain 'text' and 'deid_text' columns.",
@@ -405,7 +405,6 @@ export function NERPageContent() {
             rowDataForExport[header] = sample.data[header];
         });
         
-        // Ensure the deid_text for export is the potentially edited one
         rowDataForExport['deid_text'] = sample.data.deid_text;
 
 
@@ -444,6 +443,32 @@ export function NERPageContent() {
     }, 100); 
   };
 
+  const handleClearCache = () => {
+    try {
+      localStorage.removeItem(NER_APP_ACTIVE_SAMPLES_KEY);
+      localStorage.removeItem(NER_APP_CURRENT_SAMPLE_INDEX_KEY);
+      localStorage.removeItem(NER_APP_CSV_HEADERS_KEY);
+
+      setActiveSamples(prepareDefaultSamples());
+      setCurrentSampleIndex(0);
+      setCsvHeaders(['text', 'deid_text', 'champsid']);
+      // Trigger re-render for text areas via useEffect dependencies
+      setAnimationKey(prev => prev + 1); 
+
+      toast({
+        title: "Cache Cleared",
+        description: "Application state has been reset to defaults.",
+      });
+    } catch (error) {
+      console.error("Error clearing localStorage:", error);
+      toast({
+        title: "Cache Clear Error",
+        description: "Could not clear application cache.",
+        variant: "destructive",
+      });
+    }
+  };
+
 
   const oldTextHighlightedSegments = useMemo(() => {
     if (!originalOldText && !currentNewText && activeSamples.length === 0) return [];
@@ -479,13 +504,17 @@ export function NERPageContent() {
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
+           <Button onClick={handleClearCache} variant="outline">
+            <Trash2 className="mr-2 h-4 w-4" />
+            Clear Cache
+          </Button>
           <Button onClick={handleLoadPreviousSample} variant="outline" disabled={activeSamples.length <= 1}>
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Previous Sample
+            Previous
           </Button>
           <Button onClick={handleLoadNextSample} variant="outline" disabled={activeSamples.length <= 1}>
             <ArrowRight className="mr-2 h-4 w-4" />
-            Next Sample
+            Next
           </Button>
         </div>
       </div>
