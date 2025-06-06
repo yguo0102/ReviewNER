@@ -11,6 +11,13 @@ import { HighlightedTextRenderer } from './highlighted-text-renderer';
 import type { NerSample } from './types';
 import { getOldTextHighlightedParts } from '@/lib/ner-utils';
 import { useToast } from "@/hooks/use-toast";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
 
 const initialDefaultSampleData: Omit<NerSample, 'original_new_text'>[] = [
   {
@@ -415,6 +422,34 @@ export function NERPageContent() {
     fileInputRef.current?.click();
   };
 
+  const prepareDataForExport = () => {
+    const currentSamplesForExport = activeSamples;
+    const baseExportHeaders = csvHeaders.length > 0 ? csvHeaders : ['text', 'deid_text', 'champsid'];
+    const finalExportHeaders = [...baseExportHeaders];
+    if (!finalExportHeaders.includes('is_changed')) {
+      finalExportHeaders.push('is_changed');
+    }
+
+    const exportableData = currentSamplesForExport.map(sample => {
+      const rowData: Record<string, any> = {};
+      baseExportHeaders.forEach(header => {
+        rowData[header] = sample.data[header];
+      });
+      rowData['deid_text'] = sample.data.deid_text; 
+      const isChanged = sample.original_new_text !== undefined && sample.data.deid_text !== sample.original_new_text;
+      rowData.is_changed = isChanged;
+
+      // Ensure all finalExportHeaders keys exist
+      finalExportHeaders.forEach(header => {
+        if (!(header in rowData)) {
+          rowData[header] = null; 
+        }
+      });
+      return rowData;
+    });
+    return { exportableData, finalExportHeaders };
+  };
+
   const handleExportCSV = () => {
     if (activeSamples.length === 0) {
       toast({
@@ -424,35 +459,14 @@ export function NERPageContent() {
       });
       return;
     }
-
-    saveCurrentSampleEdits(); 
+    saveCurrentSampleEdits();
 
     setTimeout(() => {
-      const currentSamplesForExport = activeSamples; 
-
-      const baseExportHeaders = csvHeaders.length > 0 ? csvHeaders : ['text', 'deid_text'];
-      const finalExportHeaders = [...baseExportHeaders];
-      if (!finalExportHeaders.includes('is_changed')) {
-        finalExportHeaders.push('is_changed');
-      }
-
+      const { exportableData, finalExportHeaders } = prepareDataForExport();
       const csvHeaderRow = finalExportHeaders.map(escapeCSVField).join(',') + '\n';
-
-      const csvRows = currentSamplesForExport.map(sample => {
-        const rowDataForExport: Record<string, string | undefined | null> = {};
-        
-        baseExportHeaders.forEach(header => {
-            rowDataForExport[header] = sample.data[header];
-        });
-        
-        rowDataForExport['deid_text'] = sample.data.deid_text;
-
-
-        const isChanged = sample.original_new_text !== undefined && sample.data.deid_text !== sample.original_new_text;
-        rowDataForExport.is_changed = isChanged ? 'true' : 'false';
-        
+      const csvRows = exportableData.map(row => {
         return finalExportHeaders.map(headerName => {
-          return escapeCSVField(rowDataForExport[headerName]);
+          return escapeCSVField(row[headerName]);
         }).join(',');
       }).join('\n');
       
@@ -470,18 +484,52 @@ export function NERPageContent() {
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
         toast({
-          title: "Export Successful",
+          title: "CSV Export Successful",
           description: "Edited data downloaded as edited_ner_data.csv.",
         });
       } else {
          toast({
-          title: "Export Failed",
+          title: "CSV Export Failed",
           description: "Your browser doesn't support this download method.",
           variant: "destructive",
         });
       }
     }, 100); 
   };
+
+  const handleExportExcel = () => {
+    if (activeSamples.length === 0) {
+      toast({
+        title: "No Data to Export",
+        description: "Load or create some samples first.",
+        variant: "default",
+      });
+      return;
+    }
+    saveCurrentSampleEdits();
+
+    setTimeout(() => {
+      try {
+        const { exportableData, finalExportHeaders } = prepareDataForExport();
+        const worksheet = XLSX.utils.json_to_sheet(exportableData, { header: finalExportHeaders });
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Edited Data");
+        XLSX.writeFile(workbook, "edited_ner_data.xlsx");
+        toast({
+          title: "Excel Export Successful",
+          description: "Edited data downloaded as edited_ner_data.xlsx.",
+        });
+      } catch (error) {
+        console.error("Excel export error:", error);
+        toast({
+          title: "Excel Export Failed",
+          description: "An error occurred while exporting to Excel.",
+          variant: "destructive",
+        });
+      }
+    }, 100);
+  };
+
 
   const handleClearCache = () => {
     try {
@@ -540,10 +588,22 @@ export function NERPageContent() {
             <FileText className="mr-2 h-4 w-4" />
             Upload File
           </Button>
-          <Button onClick={handleExportCSV} variant="outline" disabled={activeSamples.length === 0}>
-            <Download className="mr-2 h-4 w-4" />
-            Export CSV
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" disabled={activeSamples.length === 0}>
+                <Download className="mr-2 h-4 w-4" />
+                Export Data
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={handleExportCSV}>
+                Export as CSV
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleExportExcel}>
+                Export as Excel (.xlsx)
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
            <Button onClick={handleClearCache} variant="outline">
             <Trash2 className="mr-2 h-4 w-4" />
             Clear Cache
