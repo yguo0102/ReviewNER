@@ -11,4 +11,5 @@ export interface NerSample {
   id: string;
   data: Record<string, string>; // Stores all columns from the CSV row
   // old_text and new_text are expected keys within data for core functionality
+  original_new_text?: string; // To track changes for export
 }

@@ -9,11 +9,9 @@ import { FileText, Download, ArrowLeft, ArrowRight } from 'lucide-react';
 import { HighlightedTextRenderer } from './highlighted-text-renderer';
 import type { NerSample } from './types';
 import { getOldTextHighlightedParts } from '@/lib/ner-utils';
-// AI Correct functionality removed, so correctNERTags import is removed.
-// import { correctNERTags } from '@/ai/flows/correct-ner-tags';
 import { useToast } from "@/hooks/use-toast";
 
-const defaultSampleData: NerSample[] = [
+const initialDefaultSampleData: Omit<NerSample, 'original_new_text'>[] = [
   {
     id: 'sample1',
     data: {
@@ -36,6 +34,14 @@ const defaultSampleData: NerSample[] = [
     }
   },
 ];
+
+const prepareDefaultSamples = (): NerSample[] => {
+  return initialDefaultSampleData.map(s => ({
+    ...s,
+    original_new_text: s.data.new_text,
+  }));
+};
+
 
 const escapeCSVField = (field: string | undefined | null): string => {
   if (field === null || field === undefined) {
@@ -100,11 +106,10 @@ const parseCsvRows = (csvText: string): string[][] => {
 
 
 export function NERPageContent() {
-  const [activeSamples, setActiveSamples] = useState<NerSample[]>(defaultSampleData);
+  const [activeSamples, setActiveSamples] = useState<NerSample[]>(prepareDefaultSamples());
   const [currentSampleIndex, setCurrentSampleIndex] = useState(0);
   const [originalOldText, setOriginalOldText] = useState<string>('');
   const [currentNewText, setCurrentNewText] = useState<string>('');
-  // isLoadingAi state removed
   const [animationKey, setAnimationKey] = useState(0);
   const [csvHeaders, setCsvHeaders] = useState<string[]>(['old_text', 'new_text']);
   const { toast } = useToast();
@@ -123,6 +128,7 @@ export function NERPageContent() {
       const updatedSamples = [...activeSamples];
       const sampleToUpdate = { ...updatedSamples[currentSampleIndex] };
       sampleToUpdate.data = { ...sampleToUpdate.data, new_text: currentNewText };
+      // original_new_text is not changed here, it's set at load time
       updatedSamples[currentSampleIndex] = sampleToUpdate;
       setActiveSamples(updatedSamples);
     }
@@ -137,7 +143,7 @@ export function NERPageContent() {
     } else {
       setOriginalOldText('');
       setCurrentNewText('');
-       if (activeSamples.length === 0 && defaultSampleData.length > 0) {
+       if (activeSamples.length === 0 && initialDefaultSampleData.length > 0) {
         // Initial load or all samples removed, no specific toast here anymore as it's handled by UI state
       }
     }
@@ -145,7 +151,7 @@ export function NERPageContent() {
 
 
   useEffect(() => {
-    if (activeSamples.length === 0 && defaultSampleData.length === 0) {
+    if (activeSamples.length === 0 && initialDefaultSampleData.length === 0) { // Check against raw default data length
          toast({
             title: "No Samples Loaded",
             description: "Upload a CSV or refresh to use default samples.",
@@ -186,7 +192,6 @@ export function NERPageContent() {
     setCurrentSampleIndex((prevIndex) => (prevIndex - 1 + activeSamples.length) % activeSamples.length);
   };
 
-  // handleAiCorrect function removed
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -241,18 +246,15 @@ export function NERPageContent() {
       setCsvHeaders(headerFromFile);
 
       const newSamples: NerSample[] = [];
-      // Start from 1 if there's more than one row (header + data)
-      // If only one row, it's considered header only, no data.
       const dataRows = parsedRows.length > 1 ? parsedRows.slice(1) : [];
 
 
       for (let i = 0; i < dataRows.length; i++) {
         const values = dataRows[i];
         if (values.length !== headerFromFile.length) {
-          // console.warn(`Skipping row ${i+1}: Mismatched column count. Expected ${headerFromFile.length}, got ${values.length}`);
           toast({
             title: "CSV Parsing Warning",
-            description: `Row ${i+2} has an inconsistent number of columns and was skipped.`, // +2 because header is row 1, data starts row 2
+            description: `Row ${i+2} has an inconsistent number of columns and was skipped.`,
             variant: "default"
           })
           continue; 
@@ -262,10 +264,12 @@ export function NERPageContent() {
           rowData[headerName] = values[colIndex] || '';
         });
 
-        if (rowData.old_text !== undefined && rowData.new_text !== undefined) { // Check for presence, not just truthiness
-            newSamples.push({ id: `csv_sample_${Date.now()}_${i}`, data: rowData });
-        } else {
-           // console.warn(`Skipping row ${i+1}: Missing old_text or new_text values.`);
+        if (rowData.old_text !== undefined && rowData.new_text !== undefined) {
+            newSamples.push({
+              id: `csv_sample_${Date.now()}_${i}`,
+              data: rowData,
+              original_new_text: rowData.new_text // Store original new_text from CSV
+            });
         }
       }
 
@@ -284,15 +288,11 @@ export function NERPageContent() {
           description: "The CSV file contains only a header row or is empty.",
           variant: "default",
         });
-        // Allow setting empty samples if user uploads an empty (but valid header) file.
-        // setActiveSamples([]); // This would clear defaults if an empty file is loaded.
-        // setCurrentSampleIndex(0); // Reset index
-        // return; // Or maybe proceed with empty activeSamples
       }
 
 
       setActiveSamples(newSamples);
-      setCurrentSampleIndex(0); // Reset to the first sample of the new set
+      setCurrentSampleIndex(0); 
       if (newSamples.length > 0) {
         toast({
             title: "CSV Uploaded",
@@ -332,12 +332,28 @@ export function NERPageContent() {
     saveCurrentSampleEdits();
 
     setTimeout(() => {
-      const headersToExport = csvHeaders.length > 0 ? csvHeaders : ['old_text', 'new_text'];
-      const csvHeaderRow = headersToExport.map(escapeCSVField).join(',') + '\n';
+      const baseExportHeaders = csvHeaders.length > 0 ? csvHeaders : ['old_text', 'new_text'];
+      const finalExportHeaders = [...baseExportHeaders];
+      if (!finalExportHeaders.includes('is_changed')) {
+        finalExportHeaders.push('is_changed');
+      }
+
+      const csvHeaderRow = finalExportHeaders.map(escapeCSVField).join(',') + '\n';
 
       const csvRows = activeSamples.map(sample => {
-        return headersToExport.map(headerName => {
-          return escapeCSVField(sample.data[headerName]);
+        const rowDataForExport: Record<string, string | undefined | null> = {};
+        
+        // Populate with existing data based on baseExportHeaders
+        baseExportHeaders.forEach(header => {
+            rowDataForExport[header] = sample.data[header];
+        });
+
+        // Determine and add/overwrite is_changed
+        const isChanged = sample.original_new_text !== undefined && sample.data.new_text !== sample.original_new_text;
+        rowDataForExport.is_changed = isChanged ? 'true' : 'false';
+        
+        return finalExportHeaders.map(headerName => {
+          return escapeCSVField(rowDataForExport[headerName]);
         }).join(',');
       }).join('\n');
       
@@ -403,7 +419,6 @@ export function NERPageContent() {
             <ArrowRight className="mr-2 h-4 w-4" />
             Next Sample
           </Button>
-          {/* AI Correct button removed */}
         </div>
       </div>
 
@@ -420,7 +435,16 @@ export function NERPageContent() {
                 <FileText className="mr-2 h-4 w-4" />
                 Upload CSV
               </Button>
-               <Button onClick={() => {setActiveSamples(defaultSampleData); setCurrentSampleIndex(0); setCsvHeaders(['old_text', 'new_text']);}} className="mt-4 ml-2" variant="secondary" disabled={defaultSampleData.length === 0}>
+               <Button 
+                onClick={() => {
+                  setActiveSamples(prepareDefaultSamples()); 
+                  setCurrentSampleIndex(0); 
+                  setCsvHeaders(['old_text', 'new_text']);
+                }} 
+                className="mt-4 ml-2" 
+                variant="secondary" 
+                disabled={initialDefaultSampleData.length === 0}
+              >
                 Load Default Samples
               </Button>
             </CardContent>
@@ -457,4 +481,3 @@ export function NERPageContent() {
     </div>
   );
 }
-
