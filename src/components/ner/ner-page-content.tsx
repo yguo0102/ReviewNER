@@ -2,6 +2,7 @@
 'use client';
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -211,7 +212,7 @@ export function NERPageContent() {
     if (isLoaded && activeSamples.length === 0 && initialDefaultSampleData.length === 0) {
          toast({
             title: "No Samples Loaded",
-            description: "Upload a CSV or ensure default samples are available.",
+            description: "Upload a CSV or Excel file, or ensure default samples are available.",
             variant: "default",
         });
     }
@@ -227,7 +228,7 @@ export function NERPageContent() {
     if (activeSamples.length === 0) {
        toast({
           title: "No Samples",
-          description: "Upload a CSV file to load samples.",
+          description: "Upload a CSV or Excel file to load samples.",
           variant: "default",
         });
         return;
@@ -240,13 +241,67 @@ export function NERPageContent() {
     if (activeSamples.length === 0) {
       toast({
         title: "No Samples",
-        description: "Upload a CSV file to load samples.",
+        description: "Upload a CSV or Excel file to load samples.",
         variant: "default",
       });
       return;
     }
     saveCurrentSampleEdits();
     setCurrentSampleIndex((prevIndex) => (prevIndex - 1 + activeSamples.length) % activeSamples.length);
+  };
+
+  const processImportedData = (rows: Record<string, string>[], importedFileName: string) => {
+    if (rows.length === 0) {
+      toast({
+        title: "No Data Rows",
+        description: `The file '${importedFileName}' contains no data rows or is empty.`,
+        variant: "default",
+      });
+      return;
+    }
+
+    // Assuming the first row contains headers
+    const headerFromFile = Object.keys(rows[0]).map(h => h.trim().toLowerCase());
+    const textKey = headerFromFile.find(h => h === 'text');
+    const deidTextKey = headerFromFile.find(h => h === 'deid_text');
+
+    if (!textKey || !deidTextKey) {
+      toast({
+        title: "Missing Columns",
+        description: `File '${importedFileName}' must contain 'text' and 'deid_text' columns.`,
+        variant: "destructive",
+      });
+      return;
+    }
+    setCsvHeaders(headerFromFile);
+
+    const newSamples: NerSample[] = rows.map((row, i) => {
+      const sampleData: Record<string, string> = {};
+      headerFromFile.forEach(header => {
+        sampleData[header] = String(row[header] || ''); // Ensure string conversion
+      });
+      return {
+        id: `imported_sample_${Date.now()}_${i}`,
+        data: sampleData,
+        original_new_text: sampleData.deid_text,
+      };
+    });
+
+    if (newSamples.length === 0) {
+      toast({
+        title: "No Valid Data Rows",
+        description: `No valid samples found in '${importedFileName}'. Ensure 'text' and 'deid_text' columns are present.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setActiveSamples(newSamples);
+    setCurrentSampleIndex(0);
+    toast({
+      title: "File Uploaded",
+      description: `${newSamples.length} samples loaded successfully from '${importedFileName}'.`,
+    });
   };
 
 
@@ -256,116 +311,101 @@ export function NERPageContent() {
       return;
     }
 
-    if (file.type !== 'text/csv') {
+    const fileName = file.name;
+    const fileType = file.type;
+    const fileExtension = fileName.split('.').pop()?.toLowerCase();
+
+    if (fileType === 'text/csv' || fileExtension === 'csv') {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const textContent = e.target?.result as string;
+        if (!textContent) {
+          toast({ title: "File Read Error", description: "Could not read the CSV file content.", variant: "destructive" });
+          return;
+        }
+        const parsedCsvRows = parseCsvRows(textContent);
+        if (parsedCsvRows.length < 1) {
+          toast({ title: "Invalid CSV Format", description: "CSV must contain a header row.", variant: "destructive" });
+          return;
+        }
+        const headerFromFile = parsedCsvRows[0].map(h => h.trim().toLowerCase());
+        const dataRows = parsedCsvRows.length > 1 ? parsedCsvRows.slice(1) : [];
+        
+        const jsonData: Record<string, string>[] = dataRows.map((values, rowIndex) => {
+          const rowData: Record<string, string> = {};
+          if (values.length !== headerFromFile.length) {
+             toast({
+                title: "CSV Parsing Warning",
+                description: `Row ${rowIndex + 2} in '${fileName}' has an inconsistent number of columns and was skipped.`,
+                variant: "default"
+             });
+             return null; // Will be filtered out
+          }
+          headerFromFile.forEach((headerName, colIndex) => {
+            rowData[headerName] = values[colIndex] || '';
+          });
+          return rowData;
+        }).filter(row => row !== null) as Record<string, string>[];
+
+        processImportedData(jsonData, fileName);
+      };
+      reader.onerror = () => toast({ title: "File Read Error", description: "An error occurred while reading the CSV file.", variant: "destructive" });
+      reader.readAsText(file);
+
+    } else if (
+        fileType === 'application/vnd.ms-excel' || // .xls
+        fileType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || // .xlsx
+        fileExtension === 'xls' || fileExtension === 'xlsx'
+    ) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const arrayBuffer = e.target?.result as ArrayBuffer;
+            if (!arrayBuffer) {
+                toast({ title: "File Read Error", description: "Could not read the Excel file content.", variant: "destructive" });
+                return;
+            }
+            try {
+                const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+                const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, {
+                    header: 1, // Get array of arrays
+                    defval: "", // Default value for empty cells
+                    blankrows: false, // Skip blank rows
+                });
+
+                if (jsonData.length < 1) {
+                   toast({ title: "Invalid Excel Format", description: `Excel file '${fileName}' must contain a header row.`, variant: "destructive" });
+                   return;
+                }
+                
+                const rawHeaders: any[] = jsonData[0] as any[];
+                const headers = rawHeaders.map(h => String(h).trim().toLowerCase());
+                const dataObjects: Record<string, string>[] = (jsonData.slice(1) as any[][]).map((rowArray: any[]) => {
+                    const obj: Record<string, string> = {};
+                    headers.forEach((header, index) => {
+                        obj[header] = String(rowArray[index] !== undefined && rowArray[index] !== null ? rowArray[index] : "");
+                    });
+                    return obj;
+                });
+
+                processImportedData(dataObjects, fileName);
+
+            } catch (error) {
+                console.error("Excel parsing error:", error);
+                toast({ title: "Excel Parsing Error", description: `Failed to parse Excel file '${fileName}'. Ensure it's a valid Excel file.`, variant: "destructive" });
+            }
+        };
+        reader.onerror = () => toast({ title: "File Read Error", description: "An error occurred while reading the Excel file.", variant: "destructive" });
+        reader.readAsArrayBuffer(file);
+    } else {
       toast({
         title: "Invalid File Type",
-        description: "Please upload a CSV file.",
+        description: `File '${fileName}' is not a supported CSV or Excel file.`,
         variant: "destructive",
       });
-      return;
     }
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const textContent = e.target?.result as string;
-      if (!textContent) {
-        toast({
-          title: "File Read Error",
-          description: "Could not read the file content.",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      const parsedRows = parseCsvRows(textContent);
-
-      if (parsedRows.length < 1) { 
-        toast({
-          title: "Invalid CSV Format",
-          description: "CSV must contain a header row.",
-          variant: "destructive",
-        });
-        return;
-      }
-      
-      const headerFromFile = parsedRows[0].map(h => h.trim().toLowerCase());
-      const textIndex = headerFromFile.indexOf('text');
-      const deidTextIndex = headerFromFile.indexOf('deid_text');
-
-      if (textIndex === -1 || deidTextIndex === -1) {
-        toast({
-          title: "Missing Columns",
-          description: "CSV must contain 'text' and 'deid_text' columns.",
-          variant: "destructive",
-        });
-        return;
-      }
-      setCsvHeaders(headerFromFile); 
-
-      const newSamples: NerSample[] = [];
-      const dataRows = parsedRows.length > 1 ? parsedRows.slice(1) : [];
-
-
-      for (let i = 0; i < dataRows.length; i++) {
-        const values = dataRows[i];
-        if (values.length !== headerFromFile.length) {
-          toast({
-            title: "CSV Parsing Warning",
-            description: `Row ${i+2} has an inconsistent number of columns and was skipped.`,
-            variant: "default"
-          })
-          continue; 
-        }
-        const rowData: Record<string, string> = {};
-        headerFromFile.forEach((headerName, colIndex) => {
-          rowData[headerName] = values[colIndex] || '';
-        });
-
-        if (rowData.text !== undefined && rowData.deid_text !== undefined) {
-            newSamples.push({
-              id: `csv_sample_${Date.now()}_${i}`,
-              data: rowData,
-              original_new_text: rowData.deid_text 
-            });
-        }
-      }
-
-
-      if (newSamples.length === 0 && dataRows.length > 0) {
-         toast({
-          title: "No Valid Data Rows",
-          description: "No valid samples found in the CSV after the header. Ensure 'text' and 'deid_text' columns are present and rows match header count.",
-          variant: "destructive",
-        });
-        return;
-      }
-       if (newSamples.length === 0 && dataRows.length === 0) {
-         toast({
-          title: "No Data Rows",
-          description: "The CSV file contains only a header row or is empty.",
-          variant: "default",
-        });
-      }
-
-      setActiveSamples(newSamples); 
-      setCurrentSampleIndex(0); 
-      if (newSamples.length > 0) {
-        toast({
-            title: "CSV Uploaded",
-            description: `${newSamples.length} samples loaded successfully.`,
-        });
-      }
-    };
-
-    reader.onerror = () => {
-      toast({
-        title: "File Read Error",
-        description: "An error occurred while reading the file.",
-        variant: "destructive",
-      });
-    };
-
-    reader.readAsText(file);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -493,12 +533,12 @@ export function NERPageContent() {
             type="file"
             ref={fileInputRef}
             onChange={handleFileUpload}
-            accept=".csv"
+            accept=".csv, application/vnd.ms-excel, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             className="hidden"
           />
           <Button onClick={triggerFileUpload} variant="outline">
             <FileText className="mr-2 h-4 w-4" />
-            Upload CSV
+            Upload File
           </Button>
           <Button onClick={handleExportCSV} variant="outline" disabled={activeSamples.length === 0}>
             <Download className="mr-2 h-4 w-4" />
@@ -526,11 +566,11 @@ export function NERPageContent() {
             </CardHeader>
             <CardContent className="text-center">
               <p className="text-muted-foreground">
-                Please upload a CSV file to start reviewing NER tags or load default samples.
+                Please upload a CSV or Excel file to start reviewing NER tags or load default samples.
               </p>
               <Button onClick={triggerFileUpload} className="mt-4">
                 <FileText className="mr-2 h-4 w-4" />
-                Upload CSV
+                Upload File
               </Button>
                <Button 
                 onClick={() => {
