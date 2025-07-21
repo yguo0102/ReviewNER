@@ -48,6 +48,7 @@ npm install
 ```bash
 npm run dev
 ```
+After it is ready (you will see "Ready ..." in the terminal, enter the url "http://localhost:9002/" in your browser to start the web app.
 
 ---
 
@@ -62,4 +63,7 @@ export PATH=$JAVA_HOME/bin:$PATH
 
 # Windows: Set JAVA_HOME and update Path in Environment Variables.
 ```
+
+## How to use
+<img width="1792" height="1202" alt="Screenshot 2025-07-21 at 15 28 19" src="https://github.com/user-attachments/assets/afb3c6ed-af13-436c-861d-71d49486cd23" />
 
